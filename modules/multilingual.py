@@ -1,4 +1,7 @@
 import time
+import os
+import tempfile
+import subprocess
 from modules.tts import TextToSpeech
 
 
@@ -6,8 +9,9 @@ class MultilingualSupport:
     def __init__(self, default_language='en'):
         self.tts = TextToSpeech()
         self.current_language = default_language
+        self.ffplay_path = r'C:\ffmpeg\bin\ffplay.exe'  # Windows
+        # On Raspberry Pi, change to: 'ffplay'
 
-        # Supported languages
         self.supported_languages = {
             'en': 'English',
             'hi': 'Hindi',
@@ -19,7 +23,8 @@ class MultilingualSupport:
             'kn': 'Kannada'
         }
 
-        # Translations for common VisionStick alerts
+        self.gtts_languages = ['hi', 'mr', 'ta', 'te', 'bn', 'gu', 'kn']
+
         self.translations = {
             'en': {
                 'ready': 'VisionStick is ready',
@@ -34,6 +39,9 @@ class MultilingualSupport:
                 'turn_right': 'Turn right',
                 'turn_left': 'Turn left',
                 'go_straight': 'Go straight',
+                'low_battery': 'Battery is low, please charge soon',
+                'crowd_ahead': 'Crowded area ahead, move slowly',
+                'low_light': 'Low light ahead, be careful',
             },
             'hi': {
                 'ready': 'विज़नस्टिक तैयार है',
@@ -48,6 +56,9 @@ class MultilingualSupport:
                 'turn_right': 'दाएं मुड़ें',
                 'turn_left': 'बाएं मुड़ें',
                 'go_straight': 'सीधे जाएं',
+                'low_battery': 'बैटरी कम है, कृपया चार्ज करें',
+                'crowd_ahead': 'आगे भीड़ है, धीरे चलें',
+                'low_light': 'आगे अंधेरा है, सावधान रहें',
             },
             'mr': {
                 'ready': 'व्हिजनस्टिक तयार आहे',
@@ -62,45 +73,71 @@ class MultilingualSupport:
                 'turn_right': 'उजवीकडे वळा',
                 'turn_left': 'डावीकडे वळा',
                 'go_straight': 'सरळ जा',
+                'low_battery': 'बॅटरी कमी आहे, कृपया चार्ज करा',
+                'crowd_ahead': 'पुढे गर्दी आहे, हळू चला',
+                'low_light': 'पुढे अंधार आहे, काळजी घ्या',
+            },
+            'ta': {
+                'ready': 'விஷன்ஸ்டிக் தயாராக உள்ளது',
+                'person_ahead': 'முன்னால் நபர் உள்ளார்',
+                'obstacle_close': 'ஆபத்து! முன்னால் தடை மிக அருகில் உள்ளது!',
+                'obstacle_warning': 'எச்சரிக்கை! முன்னால் தடை உள்ளது.',
+                'fall_detected': 'விழுவது கண்டறியப்பட்டது! SOS அலர்ட் அனுப்பப்படுகிறது!',
+                'arrived': 'நீங்கள் உங்கள் இலக்கை அடைந்துவிட்டீர்கள்',
+                'turn_right': 'வலதுபுறம் திரும்பவும்',
+                'turn_left': 'இடதுபுறம் திரும்பவும்',
+                'go_straight': 'நேராக செல்லவும்',
             }
         }
 
+    def speak_gtts(self, text, lang_code):
+        """Use gTTS + ffplay for non-English languages."""
+        try:
+            from gtts import gTTS
+            print(f"[Multilingual] [{lang_code}] {text}")
+            tts = gTTS(text=text, lang=lang_code, slow=False)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
+                temp_file = f.name
+            tts.save(temp_file)
+            subprocess.run(
+                [self.ffplay_path, '-nodisp', '-autoexit', temp_file],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            os.unlink(temp_file)
+        except Exception as e:
+            print(f"[Multilingual] gTTS error: {e}")
+            self.tts.speak(text)
+
     def set_language(self, lang_code):
-        """Change the active language."""
         if lang_code in self.supported_languages:
             self.current_language = lang_code
-            lang_name = self.supported_languages[lang_code]
-            print(f"[Multilingual] Language set to: {lang_name}")
-            self.tts.set_language(lang_code)
+            print(f"[Multilingual] Language set to: {self.supported_languages[lang_code]}")
             return True
-        else:
-            print(f"[Multilingual] ❌ Language '{lang_code}' not supported.")
-            return False
+        print(f"[Multilingual] Language '{lang_code}' not supported.")
+        return False
 
     def get(self, key):
-        """Get translated text for current language."""
         lang = self.current_language
-
-        # Fall back to English if translation missing
         if lang not in self.translations:
             lang = 'en'
-
-        text = self.translations[lang].get(key)
-        if not text:
-            # Fall back to English
-            text = self.translations['en'].get(key, key)
-
-        return text
+        return self.translations[lang].get(key) or self.translations['en'].get(key, key)
 
     def speak(self, key):
-        """Speak a translated message."""
         text = self.get(key)
-        print(f"[Multilingual] [{self.current_language}] {text}")
-        self.tts.speak_async(text)
+        if self.current_language in self.gtts_languages:
+            self.speak_gtts(text, self.current_language)
+        else:
+            print(f"[Multilingual] [en] {text}")
+            self.tts.speak(text)
+
+    def speak_text(self, text):
+        if self.current_language in self.gtts_languages:
+            self.speak_gtts(text, self.current_language)
+        else:
+            self.tts.speak(text)
 
     def translate_detection(self, label, position, distance):
-        """Translate object detection alert."""
-        # Basic translation of detection message
         if self.current_language == 'hi':
             return f"{label} {position} पर, {distance}"
         elif self.current_language == 'mr':
@@ -109,28 +146,22 @@ class MultilingualSupport:
             return f"{label} {position}, {distance}"
 
     def run(self):
-        """Test multilingual support."""
         print("[Multilingual] Testing multilingual support...")
-
-        # Test English
         self.set_language('en')
         self.speak('ready')
-        time.sleep(2)
-
-        # Test Hindi
+        time.sleep(3)
         self.set_language('hi')
         self.speak('ready')
-        time.sleep(2)
-
-        # Test Marathi
+        time.sleep(3)
         self.set_language('mr')
         self.speak('ready')
-        time.sleep(2)
-
+        time.sleep(3)
+        self.set_language('ta')
+        self.speak('ready')
+        time.sleep(3)
         print("[Multilingual] Test complete!")
 
 
-# Quick test
 if __name__ == "__main__":
     ml = MultilingualSupport()
     ml.run()
